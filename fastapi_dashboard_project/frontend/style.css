@@ -1,0 +1,64 @@
+
+body{
+margin:0;
+font-family:Arial;
+background:#f4f6f9
+}
+
+.sidebar{
+width:220px;
+height:100vh;
+background:#1e293b;
+color:white;
+position:fixed;
+padding:20px
+}
+
+.sidebar a{
+display:block;
+color:white;
+text-decoration:none;
+margin:10px 0
+}
+
+.content{
+margin-left:240px;
+padding:40px
+}
+
+.cards{
+display:flex;
+gap:20px
+}
+
+.card{
+background:white;
+padding:30px;
+border-radius:10px;
+width:200px;
+box-shadow:0 3px 10px rgba(0,0,0,0.1)
+}
+
+table{
+width:100%;
+margin-top:20px;
+border-collapse:collapse
+}
+
+th,td{
+padding:10px;
+border-bottom:1px solid #ddd
+}
+
+button{
+background:#2563eb;
+color:white;
+border:none;
+padding:8px 15px;
+border-radius:5px
+}
+
+input{
+padding:8px;
+margin-right:10px
+}

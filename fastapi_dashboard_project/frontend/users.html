@@ -1,0 +1,44 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>Users</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="sidebar">
+<h2>Dashboard</h2>
+<a href="index.html">Home</a>
+<a href="users.html">Users</a>
+<a href="projects.html">Projects</a>
+</div>
+
+<div class="content">
+
+<h1>Users</h1>
+
+<input id="username" placeholder="username">
+<input id="email" placeholder="email">
+<button onclick="addUser()">Add User</button>
+
+<table>
+<thead>
+<tr>
+<th>ID</th>
+<th>Name</th>
+<th>Email</th>
+<th>Delete</th>
+</tr>
+</thead>
+
+<tbody id="usersTable"></tbody>
+
+</table>
+
+</div>
+
+<script src="app.js"></script>
+
+</body>
+</html>
