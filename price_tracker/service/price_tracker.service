@@ -1,0 +1,12 @@
+[Unit]
+Description=Price Tracker API Service
+After=network.target
+
+[Service]
+User=mm-alnajhi
+WorkingDirectory=/mnt/c/Users/Moham/Desktop/price_tracker
+ExecStart=/mnt/c/Users/Moham/Desktop/price_tracker/venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

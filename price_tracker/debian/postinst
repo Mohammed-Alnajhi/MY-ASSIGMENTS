@@ -1,0 +1,14 @@
+#!/bin/bash
+
+echo "Installing Price Tracker..."
+
+cp -r /mnt/c/Users/Moham/Desktop/price_tracker /opt/price-tracker
+
+
+cp /opt/price-tracker/debian/price-tracker.service /etc/systemd/system/
+
+systemctl daemon-reload
+systemctl enable price-tracker
+systemctl start price-tracker
+
+echo "Installation complete!"

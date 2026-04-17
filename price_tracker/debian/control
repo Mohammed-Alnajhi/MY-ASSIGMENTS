@@ -1,0 +1,8 @@
+Package: price-tracker
+Version: 1.0
+Section: utils
+Priority: optional
+Architecture: all
+Maintainer: Mohammed
+Description: Price Tracker System (Scraping + API + PostgreSQL)
+ A complete system that scrapes book prices and exposes them via FastAPI.
