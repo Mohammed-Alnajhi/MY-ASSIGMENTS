@@ -1,0 +1,69 @@
+توثيق مشروع Data Pipeline باستخدام Apache NiFi و Kafka
+
+التاريخ: 17 مايو 2026
+
+اسم المشروع: Real-Time Data Pipeline Using Apache NiFi and Kafka
+
+1. ملخص المشروع
+تم بناء خط أنابيب بيانات (Data Pipeline) متكامل يقوم بالآتي:
+
+قراءة ملفات CSV من مجلد الإدخال
+
+تقسيم الملفات الكبيرة إلى أجزاء بحجم 64 كيلوبايت
+
+تحويل البيانات من صيغة CSV إلى صيغة JSON
+
+إرسال البيانات إلى Kafka
+
+استهلاك البيانات من Kafka
+
+حفظ البيانات النهائية في مجلد الإخراج بصيغة JSON
+
+2. المكونات المستخدمة
+المكون	الإصدار	الوظيفة
+Apache NiFi	2.9.0	معالجة وتدفق البيانات
+Apache Kafka	7.3.2	وسيط الرسائل
+ZooKeeper	7.3.2	إدارة Kafka
+Docker	Latest	تشغيل الحاويات
+3. هيكل المشروع
+3.1 مسار العمل
+text
+C:\bigdata--lab\
+3.2 المجلدات المنشأة
+text
+C:\bigdata--lab\
+├── nifi_input\          # ملفات CSV المدخلة
+├── nifi_output\         # ملفات JSON الناتجة
+├── hadoop_data\         # بيانات Hadoop (namenode + datanode)
+├── itversity-material\  # مواد itversity
+├── data\                # بيانات إضافية
+└── cluster_util_db_scripts\
+4. ملف Docker Compose
+4.1 الخدمات المشغلة
+الخدمة	الصورة	المنافذ
+zoo1	confluentinc/cp-zookeeper:7.3.2	2181
+kafka1	confluentinc/cp-kafka:7.3.2	9092, 29092
+kafka2	confluentinc/cp-kafka:7.3.2	9093, 29093
+kafka3	confluentinc/cp-kafka:7.3.2	9094, 29094
+kafka-ui	provectuslabs/kafka-ui:latest	8081
+hadoop-namenode	bde2020/hadoop-namenode:2.0.0-hadoop3.2.1-java8	9870, 9000
+hadoop-datanode	bde2020/hadoop-datanode:2.0.0-hadoop3.2.1-java8	-
+nifi	apache/nifi:latest	8080, 8443
+itvdelab	itversity/itvdelab	8888, 9879, 10000, 4040, 8078, 18180, 18181
+cluster_util_db	postgres:13	6432
+4.2 شبكة الحاويات
+text
+Network Name: itvdelabnw
+Driver: bridge
+5. تدفق البيانات (Data Flow)
+5.1 مسار البيانات
+text
+[CSV Files] → [GetFile] → [SplitText] → [ConvertRecord] → [PublishKafka] → [ConsumeKafka] → [PutFile] → [JSON Output]
+5.2 شرح كل مرحلة
+المرحلة	الـ Processor	الوظيفة
+1	GetFile	قراءة ملفات CSV من مجلد الإدخال
+2	SplitText	تقسيم الملفات الكبيرة إلى أجزاء 64KB
+3	ConvertRecord	تحويل CSV إلى JSON
+4	PublishKafka	إرسال البيانات إلى Kafka Topic
+5	ConsumeKafka	استهلاك البيانات من Kafka Topic
+6	PutFile	حفظ البيانات في مجلد الإخراج

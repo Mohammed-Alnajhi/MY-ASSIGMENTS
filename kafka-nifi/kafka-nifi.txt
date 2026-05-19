@@ -1,0 +1,157 @@
+================================================================================
+                    توثيق مشروع Data Pipeline
+        Real-Time Data Pipeline Using Apache NiFi and Kafka
+================================================================================
+
+إعداد الطالب: محمد النجحي
+التاريخ: 14 May 2026
+--------------------------------------------------------------------------------
+
+أولاً: ملخص المشروع
+===================
+تم بناء خط أنابيب بيانات (Data Pipeline) متكامل يقوم بمعالجة البيانات في
+الوقت الفعلي (Real-Time). يبدأ المشروع بقراءة ملفات CSV من مجلد الإدخال،
+ثم يقوم بمعالجتها وتحويلها وتقسيمها، ثم إرسالها إلى Kafka، وأخيراً تخزينها
+في HDFS مع تقسيم حسب التاريخ.
+
+ثانياً: المكونات المستخدمة
+==========================
+1. Apache NiFi 2.9.0      - لمعالجة وتدفق البيانات
+2. Apache Kafka 7.3.2     - وسيط الرسائل (Message Broker)
+3. Apache ZooKeeper 7.3.2 - لإدارة Kafka
+4. Apache Hadoop          - لتخزين البيانات (HDFS)
+5. Docker                 - لتشغيل جميع الخدمات في حاويات
+
+ثالثاً: هيكل المشروع (Architecture)
+====================================
+تم تصميم تدفق البيانات بالشكل التالي:
+
+ملفات CSV (مجلد الإدخال)
+        ↓
+    ListFile (NiFi)
+        ↓
+    FetchFile (NiFi)
+        ↓
+    SplitContent (NiFi) - تقسيم الملفات إلى أجزاء 64KB
+        ↓
+    RouteText (NiFi) - توجيه البيانات حسب المحتوى
+        ↓
+    UpdateAttribute (NiFi) - إضافة بيانات وصفية
+        ↓
+    PublishKafka (NiFi) - إرسال إلى Kafka Topic
+        ↓
+    Kafka Topic (nifi.orders.json)
+        ↓
+    ConsumeKafka (NiFi) - استهلاك البيانات من Kafka
+        ↓
+    PutHDFS (NiFi) - حفظ في HDFS
+        ↓
+    HDFS (تخزين مقسم حسب التاريخ: /data/year=/month=/day=/)
+
+رابعاً: إعدادات NiFi بالتفصيل
+==============================
+1. ListFile:
+   - Input Directory: /opt/nifi/input_data
+   - File Filter: .*\.csv$
+   - Polling Interval: 5 sec
+
+2. FetchFile:
+   - Completion Strategy: None
+
+3. SplitContent:
+   - Header Line Count: 1
+   - Line Split Count: 100
+   - Fragment Size: 64 KB
+
+4. PublishKafka:
+   - Kafka Brokers: kafka1:19092,kafka2:19093,kafka3:19094
+   - Topic Name: nifi.orders.json
+   - Delivery Guarantee: all
+
+5. ConsumeKafka:
+   - Kafka Brokers: kafka1:19092,kafka2:19093,kafka3:19094
+   - Topic Name(s): nifi.orders.json
+   - Group ID: nifi-consumer-group
+   - Auto Offset Reset: earliest
+
+6. PutHDFS:
+   - Directory: /data/year=${now():format('yyyy')}/month=${now():format('MM')}/day=${now():format('dd')}
+   - Conflict Resolution Strategy: replace
+
+خامساً: إعدادات Docker
+=======================
+تم إنشاء ملف docker-compose.yml يحتوي على الخدمات التالية:
+
+| الخدمة          | الصورة                                    | المنافذ                            |
+|----------------|-------------------------------------------|------------------------------------|
+| zoo1           | confluentinc/cp-zookeeper:7.3.2          | 2181                              |
+| kafka1         | confluentinc/cp-kafka:7.3.2              | 9092, 29092                       |
+| kafka2         | confluentinc/cp-kafka:7.3.2              | 9093, 29093                       |
+| kafka3         | confluentinc/cp-kafka:7.3.2              | 9094, 29094                       |
+| kafka-ui       | provectuslabs/kafka-ui:latest            | 8081                              |
+| nifi           | apache/nifi:latest                        | 8080, 8443                        |
+| hadoop-namenode| bde2020/hadoop-namenode:2.0.0-hadoop3.2.1| 9870, 9000                        |
+| hadoop-datanode| bde2020/hadoop-datanode:2.0.0-hadoop3.2.1| -                                 |
+
+سادساً: أوامر التشغيل
+======================
+1. إنشاء المجلدات:
+   cd C:\bigdata--lab
+   mkdir nifi_input nifi_output hadoop_data\namenode hadoop_data\datanode
+
+2. تشغيل الحاويات:
+   docker compose up -d
+
+3. إنشاء مواضيع Kafka:
+   docker exec kafka1 kafka-topics --create --bootstrap-server kafka1:19092 --topic nifi.orders.json --partitions 3 --replication-factor 1
+
+4. إنشاء مجلد HDFS:
+   docker exec hadoop-namenode hdfs dfs -mkdir -p /data
+   docker exec hadoop-namenode hdfs dfs -chmod 777 /data
+
+5. الوصول إلى الخدمات:
+   - NiFi UI: http://localhost:8080/nifi (admin / admin123)
+   - Kafka UI: http://localhost:8081
+   - HDFS UI: http://localhost:9870
+
+سابعاً: إحصائيات الأداء (خلال 5 دقائق)
+=======================================
+| المكون         | المدخلات    | المخرجات    | عدد المهام     |
+|----------------|-------------|-------------|----------------|
+| ListFile       | 0 (0 bytes) | 0 (0 bytes) | 121 مهام       |
+| FetchFile      | 71 (0 bytes)| 71 (446 KB) | 71 مهام        |
+| SplitContent   | 71 (446 KB) | 142 (892 KB)| 71 مهام        |
+| RouteText      | 152 (891 KB)| 456 (1.74MB)| 152 مهمة       |
+| UpdateAttribute| 432 (1.65MB)| 432 (1.65MB)| 432 مهمة       |
+
+ثامناً: التحديات التي تم حلها
+==============================
+1. مشكلة اتصال Kafka: تم حل بتعيين عنوان brokers الصحيح (kafka1:19092)
+2. مشكلة SplitContent: تم حل بتعيين Header Line Count = 1
+3. مشكلة HDFS: تم حل بإضافة مجلد hadoop_conf وملفات التكوين
+4. مشكلة Git: تم حل بإنشاء مستودع جديد ورفع الملفات
+
+تاسعاً: روابط المشروع
+======================
+- مستودع GitHub: https://github.com/Mohammed-Alnajhi/kafka-nifi-pipeline
+- مجلد العمل: C:\bigdata--lab
+- ملفات المشروع: docker-compose.yml, nifi_flow.json, generate_data.py
+
+عاشراً: الخلاصة
+================
+تم بنجاح تنفيذ خط أنابيب بيانات متكامل يعمل في الوقت الفعلي، يقرأ بيانات CSV،
+يقوم بتحويلها ومعالجتها، يرسلها إلى Kafka، ثم يخزنها في HDFS بشكل مقسم حسب
+التاريخ. جميع المكونات تعمل بشكل مستقر ويمكنها معالجة كميات كبيرة من البيانات
+بشكل مستمر.
+
+المشروع يثبت القدرة على:
+✅ بناء Data Pipeline احترافي
+✅ التعامل مع Apache NiFi
+✅ التعامل مع Apache Kafka
+✅ التعامل مع Apache Hadoop HDFS
+✅ العمل مع Docker و Docker Compose
+
+================================================================================
+                            نهاية التوثيق
+              تم الإعداد بواسطة: محمد النجحي | 14 May 2026
+================================================================================
