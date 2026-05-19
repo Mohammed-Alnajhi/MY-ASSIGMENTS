@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تقرير تمرين Hive Lab - تنفيذ SCD Type 2</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f5f5f5;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #1a3a5c, #2c5a8c);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header .student-name {
+            font-size: 16px;
+            opacity: 0.9;
+            margin-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.3);
+            display: inline-block;
+            padding-top: 10px;
+        }
+        
+        .content {
+            padding: 30px;
+        }
+        
+        .section {
+            margin-bottom: 40px;
+            border-bottom: 2px solid #e0e0e0;
+            padding-bottom: 30px;
+        }
+        
+        .section:last-child {
+            border-bottom: none;
+        }
+        
+        .section-title {
+            background-color: #2c5a8c;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 22px;
+        }
+        
+        .section-subtitle {
+            background-color: #e8f0f8;
+            color: #1a3a5c;
+            padding: 10px 15px;
+            border-radius: 6px;
+            margin: 20px 0 15px 0;
+            font-size: 18px;
+            border-right: 4px solid #2c5a8c;
+        }
+        
+        .code-block {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 13px;
+            margin: 15px 0;
+            direction: ltr;
+            text-align: left;
+        }
+        
+        .code-block pre {
+            margin: 0;
+        }
+        
+        .result-box {
+            background-color: #e8f5e9;
+            border-right: 4px solid #4caf50;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        
+        .result-box.success {
+            background-color: #e8f5e9;
+            border-right-color: #4caf50;
+        }
+        
+        .result-box.warning {
+            background-color: #fff3e0;
+            border-right-color: #ff9800;
+        }
+        
+        .result-box.info {
+            background-color: #e3f2fd;
+            border-right-color: #2196f3;
+        }
+        
+        .screenshot {
+            margin: 20px 0;
+            text-align: center;
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        
+        .screenshot img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .screenshot-caption {
+            margin-top: 10px;
+            color: #666;
+            font-size: 14px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+        }
+        
+        th, td {
+            border: 1px solid #ddd;
+            padding: 10px;
+            text-align: center;
+        }
+        
+        th {
+            background-color: #2c5a8c;
+            color: white;
+        }
+        
+        .conclusion {
+            background: linear-gradient(135deg, #1a3a5c, #2c5a8c);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            margin-top: 30px;
+        }
+        
+        .conclusion h3 {
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+        
+        .badge {
+            display: inline-block;
+            background-color: #4caf50;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 12px;
+            margin-right: 10px;
+        }
+        
+        @media print {
+            body {
+                background-color: white;
+                padding: 0;
+            }
+            .screenshot img {
+                max-width: 80%;
+            }
+        }
+        
+        .term-box {
+            background-color: #f0f4f8;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border: 1px solid #cce0f0;
+        }
+        
+        .term-box h4 {
+            color: #1a3a5c;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 تقرير تمرين Hive Lab</h1>
+            <h2>تنفيذ وتطبيق Slowly Changing Dimension Type 2</h2>
+            <div class="student-name">إعداد: المهندس | Mohammed-Mohammed-Alnajhi</div>
+        </div>
+        
+        <div class="content">
+            
+            <!-- ========== القسم 1: إنشاء الجدول الداخلي ========== -->
+            <div class="section">
+                <div class="section-title">🔷 1. إنشاء الجدول الداخلي (Internal Table)</div>
+                <p>تم إنشاء جدول داخلي باسم <strong>customer_internal</strong> ليكون تحت الإدارة المباشرة لـ Hive، حيث يتولى النظام مسؤولية تنظيم البيانات وتخزينها في المستودع الافتراضي.</p>
+                
+                <div class="code-block">
+                    <pre>CREATE TABLE customer_internal (
+    CustomerID INT,
+    Name STRING,
+    Email STRING,
+    Phone_Number STRING,
+    Address STRING,
+    JOIN_Date STRING
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+    "separatorChar" = ",",
+    "quoteChar" = "\"",
+    "escapeChar" = "\\"
+)
+STORED AS TEXTFILE;</pre>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تم إنشاء الجدول الداخلي بنجاح في 1.706 ثانية.
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20193852.png" alt="إنشاء الجدول الداخلي" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: إنشاء جدول customer_internal</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 2: إنشاء الجدول الخارجي ========== -->
+            <div class="section">
+                <div class="section-title">🔷 2. إنشاء الجدول الخارجي (External Table)</div>
+                <p>تم إنشاء جدول خارجي باسم <strong>customer_external</strong> مع تحديد موقع تخزين مخصص في HDFS، والهدف هو فصل هيكل الجدول عن الملفات الخام مما يضمن بقاء البيانات حتى بعد حذف الجدول.</p>
+                
+                <div class="code-block">
+                    <pre>CREATE EXTERNAL TABLE customer_external (
+    CustomerID INT,
+    Name STRING,
+    Email STRING,
+    Phone_Number STRING,
+    Address STRING,
+    JOIN_Date STRING
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES (
+    "separatorChar" = ",",
+    "quoteChar" = "\"",
+    "escapeChar" = "\\"
+)
+STORED AS TEXTFILE
+LOCATION '/user/hive/external/customer_external';</pre>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تم إنشاء الجدول الخارجي بنجاح في 0.101 ثانية.
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20193939.png" alt="إنشاء الجدول الخارجي" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: إنشاء جدول customer_external</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 3: تحميل البيانات ========== -->
+            <div class="section">
+                <div class="section-title">🔷 3. تحميل البيانات إلى الجداول</div>
+                <p>تم تحميل ملف <strong>customer_updated.csv</strong> إلى كلا الجدولين الداخلي والخارجي.</p>
+                
+                <div class="code-block">
+                    <pre>LOAD DATA LOCAL INPATH '/tmp/customer_updated.csv' INTO TABLE customer_internal;
+LOAD DATA LOCAL INPATH '/tmp/customer_updated.csv' INTO TABLE customer_external;</pre>
+                </div>
+                
+                <table>
+                    <thead>
+                        <tr><th>الجدول</th><th>وقت التحميل</th><th>الحالة</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>customer_internal</td><td>3.13 ثانية</td><td>✅ OK</td></tr>
+                        <tr><td>customer_external</td><td>0.238 ثانية</td><td>✅ OK</td></tr>
+                    </tbody>
+                </table>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20200259.png" alt="تحميل البيانات" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: تحميل البيانات وعرض أول 5 سجلات</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 4: حل مشكلة الفاصلة في Address ========== -->
+            <div class="section">
+                <div class="section-title">🔷 4. حل مشكلة الفاصلة داخل عمود Address</div>
+                <p>بعض قيم عمود <strong>Address</strong> تحتوي على فواصل داخل النص، مما يفسد قراءة ملف CSV.</p>
+                
+                <div class="term-box">
+                    <h4>📖 OpenCSVSerde - المترجم المتخصص</h4>
+                    <p>هو القارئ المتخصص الذي تم استخدامه بدلاً من القارئ الافتراضي، ويتميز بقدرته العالية على معالجة ملفات CSV التي تحتوي على تداخل في الرموز أو تعقيدات في النصوص الطويلة مثل العناوين.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>🔹 separatorChar - فاصل الحقول</h4>
+                    <p>يحدد الرمز المستخدم للفصل بين عمود وآخر داخل الملف، وتم ضبطه على الفاصلة (,) لتطابق بنية ملفات CSV.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>🔹 quoteChar - رمز الاقتباس</h4>
+                    <p>يخبر المحرك بأن أي نص يقع بين علامتي تنصيص ("") يجب معالجته ككتلة واحدة، وبالتالي يتم تجاهل أي فاصلة موجودة داخل هذه العلامات.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>🔹 escapeChar - رمز الهروب</h4>
+                    <p>يستخدم رمز الخط المائل الخلفي (\) لتعريف النظام بأن الرمز الذي يليه مباشرة هو نص عادي وليس له دلالة برمجية.</p>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تمت قراءة العناوين بشكل صحيح، وظهرت البيانات في الاستعلامات بدون أخطاء.
+                </div>
+            </div>
+            
+            <!-- ========== القسم 5: حذف الجداول ========== -->
+            <div class="section">
+                <div class="section-title">🔷 5. تجربة حذف الجداول (DROP TABLE)</div>
+                
+                <div class="code-block">
+                    <pre>DROP TABLE customer_internal;
+DROP TABLE customer_external;</pre>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20200426.png" alt="حذف الجداول" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: حذف الجدولين الداخلي والخارجي</div>
+                </div>
+                
+                <div class="result-box info">
+                    <strong>📌 نتيجة حذف الجدول الداخلي (customer_internal):</strong><br>
+                    تم حذف هيكل الجدول من قاعدة البيانات، وتم حذف الملفات الفعلية من HDFS. البيانات ضاعت بالكامل.
+                </div>
+                
+                <div class="result-box info">
+                    <strong>📌 نتيجة حذف الجدول الخارجي (customer_external):</strong><br>
+                    تم حذف تعريف الجدول فقط، بينما بقيت البيانات الفعلية محفوظة في مسارها المحدد داخل HDFS.
+                </div>
+                
+                <table>
+                    <thead><tr><th>نوع الجدول</th><th>حذف الهيكل</th><th>حذف البيانات</th></tr></thead>
+                    <tbody>
+                        <tr><td>🔷 Internal Table</td><td>✅ نعم</td><td>✅ نعم (تضيع بالكامل)</td></tr>
+                        <tr><td>🌐 External Table</td><td>✅ نعم</td><td>❌ لا (تبقى في HDFS)</td></tr>
+                    </tbody>
+                </table>
+                
+                <div class="result-box success">
+                    💡 <strong>الاستنتاج:</strong> الجداول الخارجية هي الخيار الأكثر أماناً في بيئات العمل الضخمة للحفاظ على سلامة البيانات، بينما تستخدم الجداول الداخلية للبيانات المؤقتة أو التي تدار كلياً داخل بيئة العمل.
+                </div>
+            </div>
+            
+            <!-- ========== القسم 6: إنشاء جدول SCD2 ========== -->
+            <div class="section">
+                <div class="section-title">🔷 6. إنشاء جدول البعد (SCD Type 2)</div>
+                <p>تم إنشاء جدول <strong>customer_scd2</strong> لدعم تتبع التغييرات التاريخية للبيانات (Slowly Changing Dimension Type 2).</p>
+                
+                <div class="code-block">
+                    <pre>CREATE EXTERNAL TABLE customer_scd2 (
+    CustomerID INT,
+    Name STRING,
+    Email STRING,
+    Phone_Number STRING,
+    Address STRING,
+    JOIN_Date STRING,
+    Start_Date STRING,
+    End_Date STRING,
+    Is_Current STRING
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+STORED AS TEXTFILE
+LOCATION '/user/hive/scd2/customer_scd2_mixed';</pre>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تم إنشاء الجدول بنجاح في 0.181 ثانية.
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20200521.png" alt="إنشاء جدول SCD2" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: إنشاء جدول customer_scd2</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 7: تحميل بيانات SCD2 ========== -->
+            <div class="section">
+                <div class="section-title">🔷 7. تحميل البيانات إلى جدول SCD2</div>
+                
+                <div class="code-block">
+                    <pre>LOAD DATA LOCAL INPATH '/tmp/customer_scd2_mixed.csv' INTO TABLE customer_scd2;</pre>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تم تحميل البيانات بنجاح في 0.228 ثانية.
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20200742.png" alt="تحميل بيانات SCD2" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: تحميل customer_scd2_mixed.csv إلى جدول SCD2</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 8: جدول Staging ========== -->
+            <div class="section">
+                <div class="section-title">🔷 8. إنشاء جدول مؤقت (Staging Table)</div>
+                <p>تم إنشاء جدول مؤقت باسم <strong>customer_new</strong> ليكون الوعاء الأول لاستقبال البيانات الخام القادمة من ملف customer_updated.csv.</p>
+                
+                <div class="code-block">
+                    <pre>CREATE TABLE customer_new (
+    CustomerID INT,
+    Name STRING,
+    Email STRING,
+    Phone_Number STRING,
+    Address STRING,
+    JOIN_Date STRING
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+STORED AS TEXTFILE;
+
+LOAD DATA LOCAL INPATH '/tmp/customer_updated.csv' INTO TABLE customer_new;</pre>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201200.png" alt="إنشاء جدول مؤقت" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: إنشاء جدول customer_new</div>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201236.png" alt="تحميل بيانات الجدول المؤقت" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: تحميل البيانات إلى customer_new</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 9: تحديث SCD2 ========== -->
+            <div class="section">
+                <div class="section-title">🔷 9. تحديث SCD2 (بدون UPDATE/DELETE)</div>
+                <p>بما أن <strong>Hive لا يدعم عمليات UPDATE أو DELETE</strong>، تم استخدام أسلوب INSERT فقط لتطبيق SCD Type 2 من خلال أربعة مسارات منطقية:</p>
+                
+                <div class="term-box">
+                    <h4>📌 المسار الأول: الحفاظ على السجلات التاريخية</h4>
+                    <p>يتم استرجاع كافة السجلات التي انتهت صالحيتها سابقاً (Is_Current = '0') لضمان بقاء السجلات غير النشطة محفوظة في النظام.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>📌 المسار الثاني: الحفاظ على السجلات الحالية غير المتغيرة</h4>
+                    <p>يتم البحث عن العملاء الذين لم تطرأ أي تعديلات على بياناتهم، وإعادة إدراجهم كما هم للحفاظ على استمرارية البيانات التي لم تتأثر بالتحديث.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>📌 المسار الثالث: إغلاق السجل القديم للمعدل</h4>
+                    <p>عند اكتشاف اختلاف في بيانات عميل موجود مسبقاً، يتم ضبط تاريخ الانتهاء (End_Date) على تاريخ اليوم الحالي وتغيير Is_Current إلى '0'.</p>
+                </div>
+                
+                <div class="term-box">
+                    <h4>📌 المسار الرابع: إدراج البيانات الجديدة والنسخ المحدثة</h4>
+                    <p>يتم إضافة العملاء الجدد الذين يظهرون لأول مرة، وكذلك النسخ المحدثة للعملاء الذين تغيرت بياناتهم (مع Is_Current = '1').</p>
+                </div>
+                
+                <div class="code-block">
+                    <pre>-- إغلاق السجلات القديمة (المعدلة)
+INSERT INTO customer_scd2
+SELECT 
+    s.CustomerID, s.Name, s.Email, s.Phone_Number, s.Address, s.JOIN_Date,
+    s.Start_Date, CURRENT_DATE() AS End_Date, '0' AS Is_Current
+FROM customer_scd2 s
+JOIN customer_new n ON s.CustomerID = n.CustomerID
+WHERE s.Is_Current = '1'
+  AND (s.Name != n.Name OR s.Email != n.Email 
+       OR s.Phone_Number != n.Phone_Number OR s.Address != n.Address);</pre>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201425.png" alt="تحديث SCD2" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: تنفيذ INSERT لإغلاق السجلات القديمة</div>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201457.png" alt="نتيجة التحديث 1" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: اكتمال Job الأول بنجاح</div>
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201657.png" alt="نتيجة التحديث 2" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: اكتمال Job الثاني بنجاح</div>
+                </div>
+            </div>
+            
+            <!-- ========== القسم 10: عرض النتائج النهائية ========== -->
+            <div class="section">
+                <div class="section-title">🔷 10. عرض السجلات الحالية في SCD2</div>
+                
+                <div class="code-block">
+                    <pre>SELECT * FROM customer_scd2 WHERE Is_Current = '1' LIMIT 10;</pre>
+                </div>
+                
+                <div class="result-box success">
+                    ✅ <strong>النتيجة:</strong> تم عرض أول 10 سجلات حيث Is_Current = '1'.<br>
+                    📅 جميع السجلات المعروضة لها Start_Date = 2026-05-10 و End_Date فارغ (NULL).
+                </div>
+                
+                <div class="screenshot">
+                    <img src="Screenshot%202026-05-10%20201757.png" alt="نتائج SCD2" onerror="this.style.display='none'">
+                    <div class="screenshot-caption">📸 لقطة شاشة: عرض السجلات الحالية من جدول SCD2</div>
+                </div>
+            </div>
+            
+            <!-- ========== الخاتمة ========== -->
+            <div class="conclusion">
+                <h3>📋 الخلاصة النهائية</h3>
+                <table style="background: transparent; color: white; border-color: rgba(255,255,255,0.3);">
+                    <thead><tr><th>المتطلب</th><th>الحالة</th></tr></thead>
+                    <tbody>
+                        <tr><td>إنشاء Internal Table</td><td>✅ تم بنجاح</td></tr>
+                        <tr><td>إنشاء External Table</td><td>✅ تم بنجاح</td></tr>
+                        <tr><td>حل مشكلة الفاصلة في Address</td><td>✅ تم باستخدام OpenCSVSerde</td></tr>
+                        <tr><td>تحميل البيانات إلى الجداول</td><td>✅ تم بنجاح</td></tr>
+                        <tr><td>حذف Internal Table</td><td>✅ تم - البيانات حذفت بالكامل</td></tr>
+                        <tr><td>حذف External Table</td><td>✅ تم - البيانات بقيت في HDFS</td></tr>
+                        <tr><td>إنشاء جدول SCD2</td><td>✅ تم بنجاح</td></tr>
+                        <tr><td>تطبيق SCD Type 2 بدون UPDATE/DELETE</td><td>✅ تم باستخدام INSERT فقط</td></tr>
+                    </tbody>
+                </table>
+                
+                <p style="margin-top: 20px; text-align: center; font-size: 18px;">
+                    🎉 <strong>جميع متطلبات التمرين تم تنفيذها بنجاح</strong> 🎉
+                </p>
+            </div>
+            
+        </div>
+    </div>
+</body>
+</html>
