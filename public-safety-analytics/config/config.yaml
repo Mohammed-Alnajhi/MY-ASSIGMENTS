@@ -1,0 +1,56 @@
+# ============================================
+# Public Safety Incident Analysis - Config
+# ============================================
+
+project:
+  name: "Public Safety Incident Analysis"
+  version: "1.0.0"
+  environment: "development"
+
+data_sources:
+  crime_api:
+    url: "https://api.police.uk/api/crimes-street/all-crime"
+    format: "json"
+    frequency: "daily"
+    parameters:
+      lat: 40.7128
+      lng: -74.0060
+
+  kafka:
+    bootstrap_servers: "kafka:9092"
+    topics:
+      emergency_calls: "emergency_calls"
+      crime_incidents: "crime-incidents"
+
+storage:
+  hdfs:
+    namenode: "hdfs://namenode:9000"
+    bronze: "/user/hive/warehouse/bronze"
+    silver: "/user/hive/warehouse/silver"
+    gold: "/user/hive/warehouse/gold"
+
+  clickhouse:
+    host: "clickhouse"
+    port: 8123
+    database: "public_safety"
+    user: "clickhouse"
+    password: "clickhouse"
+
+orchestration:
+  airflow:
+    url: "http://localhost:8085"
+    dag_id: "public_safety_pipeline"
+    schedule: "0 2 * * *"
+
+serving:
+  postgres:
+    host: "postgres-realtime"
+    port: 5432
+    database: "public_safety_realtime"
+    user: "safety_user"
+    password: "safety_password"
+
+quality:
+  great_expectations:
+    suite: "silver_incident_suite"
+    checkpoint: "silver_validation"

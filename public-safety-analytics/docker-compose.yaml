@@ -1,0 +1,778 @@
+# ==========================================
+# 1. Common Configurations (Anchors)
+# ==========================================
+x-healthcheck: &default-healthcheck
+  interval: 30s
+  timeout: 10s
+  retries: 5
+  start_period: 60s
+
+x-airflow-env: &airflow-env
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres-airflow/airflow_db
+  AIRFLOW__CORE__FERNET_KEY: 46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DEFAULT_TIMEZONE: "Asia/Riyadh"
+  AIRFLOW__WEBSERVER__DEFAULT_UI_TIMEZONE: "Asia/Riyadh"
+  TZ: "Asia/Riyadh"
+  _PIP_ADDITIONAL_REQUIREMENTS: "clickhouse-connect docker apache-airflow-providers-docker"
+  PYTHONPATH: "/opt/airflow"
+
+x-airflow-common: &airflow-common
+  image: apache/airflow:2.9.1
+  environment:
+    <<: *airflow-env
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./scripts:/opt/airflow/scripts
+    - /var/run/docker.sock:/var/run/docker.sock
+  depends_on:
+    postgres-airflow:
+      condition: service_healthy
+
+x-spark-env: &spark-env
+  SPARK_RPC_AUTHENTICATION_ENABLED: "no"
+  SPARK_RPC_ENCRYPTION_ENABLED: "no"
+  SPARK_LOCAL_STORAGE_ENCRYPTION_ENABLED: "no"
+  SPARK_SSL_ENABLED: "no"
+  PYSPARK_PYTHON: python3
+  PYSPARK_DRIVER_PYTHON: python3
+  HADOOP_USER_NAME: hadoop
+  SPARK_MASTER_HOST: spark-master
+  SPARK_MASTER_PORT: 7077
+  # FIX: Added HDFS-related variables to the spark-env anchor
+  HADOOP_CONF_DIR: "/opt/spark/conf"
+  SPARK_HADOOP_FS_DEFAULTFS: "hdfs://namenode:9000"
+  SPARK_HADOOP_DFS_CLIENT_USE_DATANODE_HOSTNAME: "true"
+
+# ==========================================
+# 2. Services
+# ==========================================
+services:
+
+  # ----------------------------------------
+  # Utilities & Databases
+  # ----------------------------------------
+
+  postgres-hive:
+    image: postgres:14-alpine
+    container_name: postgres-hive
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: metastore_db
+      POSTGRES_USER: hive
+      POSTGRES_PASSWORD: hivepassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_hive_data:/var/lib/postgresql/data
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore_db"]
+      <<: *default-healthcheck
+
+  postgres-airflow:
+    image: postgres:14-alpine
+    container_name: postgres-airflow
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: airflow_db
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_airflow_data:/var/lib/postgresql/data
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow_db"]
+      <<: *default-healthcheck
+
+  # ----------------------------------------
+  # Apache Airflow
+  # ----------------------------------------
+
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        echo "Running database migrations..."
+        airflow db migrate
+        echo "Creating admin user..."
+        airflow users create --username admin --password admin --firstname Admin --lastname User --role Admin --email admin@example.com || true
+    networks:
+      - data-eng-net
+
+  airflow-webserver:
+    <<: *airflow-common
+    container_name: airflow-webserver
+    restart: unless-stopped
+    command: webserver
+    ports:
+      - "8085:8080"
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-airflow:
+        condition: service_healthy
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      <<: *default-healthcheck
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    restart: unless-stopped
+    command: scheduler
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-airflow:
+        condition: service_healthy
+    networks:
+      - data-eng-net
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    restart: unless-stopped
+    command: triggerer
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+      postgres-airflow:
+        condition: service_healthy
+    networks:
+      - data-eng-net
+
+  # ----------------------------------------
+  # Hadoop (HDFS & YARN)
+  # ----------------------------------------
+
+  namenode:
+    image: apache/hadoop:3.3.6
+    container_name: namenode
+    user: root
+    hostname: namenode
+    restart: unless-stopped
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        cat <<EOF > /opt/hadoop/etc/hadoop/hdfs-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>dfs.datanode.use.datanode.hostname</name><value>true</value></property>
+        <property><name>dfs.namenode.datanode.registration.ip-hostname-check</name><value>false</value></property>
+        <property><name>dfs.datanode.data.dir</name><value>/hadoop/dfs/data</value></property>
+        <property><name>dfs.namenode.name.dir</name><value>/hadoop/dfs/name</value></property>
+        <property><name>dfs.namenode.http-address</name><value>namenode:9870</value></property>
+        </configuration>
+        EOF
+        if [ ! -d /hadoop/dfs/name/current ]; then
+          echo "Formatting NameNode..."
+          hdfs namenode -format -clusterId bigdata_cluster -force -nonInteractive
+        fi
+        echo "Starting NameNode..."
+        exec hdfs namenode
+    ports:
+      - "9870:9870"
+      - "9000:9000"
+    volumes:
+      - namenode_data:/hadoop/dfs/name
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://namenode:9870/ || exit 1"]
+      <<: *default-healthcheck
+
+  secondarynamenode:
+    image: apache/hadoop:3.3.6
+    container_name: secondarynamenode
+    user: root
+    hostname: secondarynamenode
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        cat <<EOF > /opt/hadoop/etc/hadoop/hdfs-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>dfs.datanode.use.datanode.hostname</name><value>true</value></property>
+        <property><name>dfs.namenode.datanode.registration.ip-hostname-check</name><value>false</value></property>
+        <property><name>dfs.namenode.http-address</name><value>namenode:9870</value></property>
+        <property><name>dfs.namenode.checkpoint.dir</name><value>/hadoop/dfs/namesecondary</value></property>
+        </configuration>
+        EOF
+        echo "Starting SecondaryNameNode..."
+        exec hdfs secondarynamenode
+    ports:
+      - "9868:9868"
+    volumes:
+      - secondary_namenode_data:/hadoop/dfs/namesecondary
+    networks:
+      - data-eng-net
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    container_name: datanode
+    hostname: datanode
+    user: root
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        cat <<EOF > /opt/hadoop/etc/hadoop/hdfs-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>dfs.datanode.use.datanode.hostname</name><value>true</value></property>
+        <property><name>dfs.namenode.datanode.registration.ip-hostname-check</name><value>false</value></property>
+        <property><name>dfs.datanode.data.dir</name><value>/hadoop/dfs/data</value></property>
+        </configuration>
+        EOF
+        echo "Starting DataNode..."
+        exec hdfs datanode
+    ports:
+      - "9864:9864"
+    volumes:
+      - datanode_data:/hadoop/dfs/data
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9864/ || exit 1"]
+      <<: *default-healthcheck
+
+  resourcemanager:
+    image: apache/hadoop:3.3.6
+    container_name: resourcemanager
+    hostname: resourcemanager
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        cat <<EOF > /opt/hadoop/etc/hadoop/yarn-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>yarn.resourcemanager.hostname</name><value>resourcemanager</value></property>
+        <property><name>yarn.nodemanager.aux-services</name><value>mapreduce_shuffle</value></property>
+        </configuration>
+        EOF
+        echo "Starting ResourceManager..."
+        exec yarn resourcemanager
+    ports:
+      - "8088:8088"
+    networks:
+      - data-eng-net
+
+  nodemanager:
+    image: apache/hadoop:3.3.6
+    container_name: nodemanager
+    hostname: nodemanager
+    restart: unless-stopped
+    depends_on:
+      resourcemanager:
+        condition: service_started
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        cat <<EOF > /opt/hadoop/etc/hadoop/yarn-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>yarn.resourcemanager.hostname</name><value>resourcemanager</value></property>
+        <property><name>yarn.nodemanager.aux-services</name><value>mapreduce_shuffle</value></property>
+        </configuration>
+        EOF
+        echo "Starting NodeManager..."
+        exec yarn nodemanager
+    ports:
+      - "8042:8042"
+    networks:
+      - data-eng-net
+
+  historyserver:
+    image: apache/hadoop:3.3.6
+    container_name: historyserver
+    hostname: historyserver
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+      resourcemanager:
+        condition: service_started
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        mkdir -p /opt/hadoop/etc/hadoop
+        cat <<EOF > /opt/hadoop/etc/hadoop/core-site.xml
+        <?xml version="1.0" encoding="UTF-8"?>
+        <configuration>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        </configuration>
+        EOF
+        echo "Starting JobHistoryServer..."
+        exec mapred historyserver
+    ports:
+      - "19888:19888"
+    volumes:
+      - hadoop_history_data:/opt/hadoop/data/timeline
+    networks:
+      - data-eng-net
+
+  # ----------------------------------------
+  # Apache Hive (Metastore / Catalog for Iceberg)
+  # ----------------------------------------
+
+  hive-init:
+    image: apache/hive:3.1.3
+    container_name: hive-init
+    user: root
+    depends_on:
+      postgres-hive:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
+    volumes:
+      - ./jdbc:/opt/hive/lib/custom_jdbc
+    networks:
+      - data-eng-net
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        echo "Resolving Guava & JDBC Driver conflicts..."
+        rm -f /opt/hive/lib/guava-*.jar
+        cp /opt/hadoop/share/hadoop/common/lib/guava-*.jar /opt/hive/lib/ || true
+        rm -f /opt/hive/lib/postgresql-*.jar
+        cp /opt/hive/lib/custom_jdbc/postgresql.jar /opt/hive/lib/
+        cat <<EOF > /opt/hive/conf/hive-site.xml
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+        <configuration>
+        <property><name>javax.jdo.option.ConnectionURL</name><value>jdbc:postgresql://postgres-hive:5432/metastore_db</value></property>
+        <property><name>javax.jdo.option.ConnectionDriverName</name><value>org.postgresql.Driver</value></property>
+        <property><name>javax.jdo.option.ConnectionUserName</name><value>hive</value></property>
+        <property><name>javax.jdo.option.ConnectionPassword</name><value>hivepassword</value></property>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        <property><name>hive.metastore.warehouse.dir</name><value>hdfs://namenode:9000/user/hive/warehouse</value></property>
+        <property><name>hive.metastore.schema.verification</name><value>false</value></property>
+        </configuration>
+        EOF
+        echo "Initializing Hive Metastore Schema if needed..."
+        if /opt/hive/bin/schematool -dbType postgres -info > /dev/null 2>&1; then
+          echo "Schema already exists. Skipping."
+        else
+          /opt/hive/bin/schematool -dbType postgres -initSchema
+        fi
+
+  hive-metastore:
+    image: apache/hive:3.1.3
+    container_name: hive-metastore
+    restart: unless-stopped
+    user: root
+    depends_on:
+      hive-init:
+        condition: service_completed_successfully
+      namenode:
+        condition: service_healthy
+    ports:
+      - "9083:9083"
+    volumes:
+      - ./jdbc:/opt/hive/lib/custom_jdbc
+    networks:
+      - data-eng-net
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        rm -f /opt/hadoop/share/hadoop/common/lib/guava-*.jar
+        cp /opt/hive/lib/guava-*.jar /opt/hadoop/share/hadoop/common/lib/ || true
+        rm -f /opt/hive/lib/postgresql-*.jar
+        cp /opt/hive/lib/custom_jdbc/postgresql.jar /opt/hive/lib/
+        cat <<EOF > /opt/hive/conf/hive-site.xml
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+        <configuration>
+        <property><name>javax.jdo.option.ConnectionURL</name><value>jdbc:postgresql://postgres-hive:5432/metastore_db</value></property>
+        <property><name>javax.jdo.option.ConnectionDriverName</name><value>org.postgresql.Driver</value></property>
+        <property><name>javax.jdo.option.ConnectionUserName</name><value>hive</value></property>
+        <property><name>javax.jdo.option.ConnectionPassword</name><value>hivepassword</value></property>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        <property><name>hive.metastore.uris</name><value>thrift://hive-metastore:9083</value></property>
+        <property><name>hive.metastore.warehouse.dir</name><value>hdfs://namenode:9000/user/hive/warehouse</value></property>
+        <property><name>hive.metastore.event.db.notification.api.auth</name><value>false</value></property>
+        </configuration>
+        EOF
+        echo "Starting Hive Metastore..."
+        exec /opt/hive/bin/hive --service metastore
+
+  hive-server2:
+    image: apache/hive:3.1.3
+    container_name: hive-server2
+    restart: unless-stopped
+    user: root
+    depends_on:
+      hive-metastore:
+        condition: service_started
+    ports:
+      - "10000:10000"
+      - "10002:10002"
+    volumes:
+      - ./jdbc:/opt/hive/lib/custom_jdbc
+    networks:
+      - data-eng-net
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        rm -f /opt/hadoop/share/hadoop/common/lib/guava-*.jar
+        cp /opt/hive/lib/guava-*.jar /opt/hadoop/share/hadoop/common/lib/ || true
+        rm -f /opt/hive/lib/postgresql-*.jar
+        cp /opt/hive/lib/custom_jdbc/postgresql.jar /opt/hive/lib/
+        cat <<EOF > /opt/hive/conf/hive-site.xml
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <?xml-stylesheet type="text/xsl" href="configuration.xsl"?>
+        <configuration>
+        <property><name>hive.metastore.uris</name><value>thrift://hive-metastore:9083</value></property>
+        <property><name>fs.defaultFS</name><value>hdfs://namenode:9000</value></property>
+        <property><name>dfs.client.use.datanode.hostname</name><value>true</value></property>
+        <property><name>hive.metastore.warehouse.dir</name><value>hdfs://namenode:9000/user/hive/warehouse</value></property>
+        <property><name>hive.server2.enable.doAs</name><value>false</value></property>
+        <property><name>hadoop.proxyuser.root.hosts</name><value>*</value></property>
+        <property><name>hadoop.proxyuser.root.groups</name><value>*</value></property>
+        </configuration>
+        EOF
+        echo "Starting Hive Server 2..."
+        exec /opt/hive/bin/hive --service hiveserver2
+
+  # ----------------------------------------
+  # Apache Spark (Processing Engine) - FIXED
+  # ----------------------------------------
+
+  # FIX: Added depends_on namenode and datanode
+  # FIX: Added SPARK_CONF_DIR and HADOOP_CONF_DIR environment variables
+  # FIX: Added shared hadoop-conf volume to mount core-site.xml and hdfs-site.xml
+  spark-master:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark-master
+    hostname: spark-master
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_healthy
+    command: /usr/local/spark/bin/spark-class org.apache.spark.deploy.master.Master --host spark-master --port 7077 --webui-port 8080
+    environment:
+      <<: *spark-env
+      SPARK_CONF_DIR: "/opt/spark/conf"
+      HADOOP_CONF_DIR: "/opt/spark/conf"
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - spark_master_data:/opt/spark/work
+      - ./notebooks:/home/jovyan/work
+      - ./hadoop-conf:/opt/spark/conf
+      - ./transformation/spark_jobs:/opt/spark/jobs
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://spark-master:8080 || exit 1"]
+      <<: *default-healthcheck
+
+  # FIX: Added depends_on namenode and datanode
+  # FIX: Added SPARK_CONF_DIR and HADOOP_CONF_DIR environment variables
+  # FIX: Added shared hadoop-conf volume
+  spark-worker:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark-worker
+    hostname: spark-worker
+    restart: unless-stopped
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      namenode:
+        condition: service_healthy
+      datanode:
+        condition: service_healthy
+    command: /usr/local/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
+    environment:
+      <<: *spark-env
+      SPARK_WORKER_MEMORY: 4G
+      SPARK_WORKER_CORES: 2
+      SPARK_WORKER_DIR: /tmp/spark-work
+      SPARK_CONF_DIR: "/opt/spark/conf"
+      HADOOP_CONF_DIR: "/opt/spark/conf"
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./hadoop-conf:/opt/spark/conf
+      - ./transformation/spark_jobs:/opt/spark/jobs
+    networks:
+      - data-eng-net
+
+  # ----------------------------------------
+  # Apache Kafka (KRaft Mode)
+  # ----------------------------------------
+
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    hostname: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+      - "29092:29092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: controller,broker
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:9092,EXTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_HEAP_OPTS: -Xmx1G -Xms1G
+      KAFKA_LOG_DIRS: /tmp/kraft-combined-logs
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD", "sh", "-c", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    restart: unless-stopped
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: Local-KRaft
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    networks:
+      - data-eng-net
+
+  # ----------------------------------------
+  # Apache NiFi
+  # ----------------------------------------
+
+  nifi:
+    image: apache/nifi:1.25.0
+    container_name: nifi
+    restart: unless-stopped
+    depends_on:
+      namenode:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+    ports:
+      - "8443:8443"
+    environment:
+      SINGLE_USER_CREDENTIALS_USERNAME: admin
+      SINGLE_USER_CREDENTIALS_PASSWORD: SuperSecretPassword123!
+    volumes:
+      - nifi_conf:/opt/nifi/nifi-current/conf
+      - nifi_database:/opt/nifi/nifi-current/database_repository
+      - nifi_flowfile:/opt/nifi/nifi-current/flowfile_repository
+      - nifi_content:/opt/nifi/nifi-current/content_repository
+      - nifi_provenance:/opt/nifi/nifi-current/provenance_repository
+      - nifi_state:/opt/nifi/nifi-current/state_management
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD", "/opt/nifi/nifi-toolkit-current/bin/cli.sh", "nifi", "get-root-pg-id", "-baseUrl", "https://localhost:8443", "-u", "admin", "-p", "SuperSecretPassword123!", "-k"]
+      interval: 30s
+      timeout: 20s
+      retries: 5
+      start_period: 60s
+
+  # ----------------------------------------
+  # ClickHouse (OLAP Analytics)
+  # ----------------------------------------
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: clickhouse
+    restart: unless-stopped
+    ports:
+      - "8123:8123"
+      - "9001:9000"
+    environment:
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: clickhouse
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_log:/var/log/clickhouse-server
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  # ----------------------------------------
+  # Jupyter (Universal Python IDE) - FIXED
+  # ----------------------------------------
+
+  # FIX: Added depends_on namenode
+  # FIX: Added SPARK_CONF_DIR and HADOOP_CONF_DIR
+  # FIX: Fixed PYSPARK_SUBMIT_ARGS to be a single line (no YAML multi-line issue)
+  # FIX: Added hadoop-conf volume mount
+  jupyter-spark:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: jupyter-spark
+    hostname: jupyter-spark
+    restart: unless-stopped
+    depends_on:
+      spark-master:
+        condition: service_healthy
+      spark-worker:
+        condition: service_started
+      hive-metastore:
+        condition: service_started
+      namenode:
+        condition: service_healthy
+    ports:
+      - "8888:8888"
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+      SPARK_MASTER: "spark://spark-master:7077"
+      HADOOP_USER_NAME: hadoop
+      SPARK_CONF_DIR: "/opt/spark/conf"
+      HADOOP_CONF_DIR: "/opt/spark/conf"
+      PYSPARK_SUBMIT_ARGS: "--conf spark.driver.host=jupyter-spark --conf spark.driver.bindAddress=0.0.0.0 --conf spark.hadoop.fs.defaultFS=hdfs://namenode:9000 --conf spark.hadoop.dfs.client.use.datanode.hostname=true --conf spark.hadoop.dfs.datanode.use.datanode.hostname=true --conf spark.hadoop.dfs.namenode.datanode.registration.ip-hostname-check=false --conf spark.driver.memory=4g --conf spark.executor.memory=4g --conf spark.network.timeout=600s --conf spark.executor.heartbeatInterval=60s --conf spark.sql.adaptive.enabled=true --conf spark.sql.adaptive.coalescePartitions.enabled=true pyspark-shell"
+    command: start-notebook.sh --ServerApp.token='' --ServerApp.password='' --ServerApp.password_required=False
+    volumes:
+      - ./bronze_layer:/home/jovyan/bronze_layer
+      - ./silver_layer:/home/jovyan/silver_layer
+      - ./gold_layer:/home/jovyan/gold_layer
+      - ./ingestion:/home/jovyan/ingestion
+      - ./transformation/notebooks:/home/jovyan/work
+      - ./notebooks:/home/jovyan/work
+      - ./transformation/spark_jobs:/opt/spark/jobs
+      - ./.ivy2:/home/jovyan/.ivy2
+      # FIX: Mount shared Hadoop config directory
+      - ./hadoop-conf:/opt/spark/conf
+    networks:
+      - data-eng-net
+
+  # ----------------------------------------
+  # Streamlit Dashboard (Serving Layer)
+  # ----------------------------------------
+  streamlit-dashboard:
+    build:
+      context: ./serving/dashboard
+      dockerfile: Dockerfile
+    container_name: streamlit-dashboard
+    restart: unless-stopped
+    volumes:
+      - ./serving/dashboard:/app
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+    ports:
+      - "8502:8501"
+    networks:
+      - data-eng-net
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# ==========================================
+# 3. Networks and Persistent Volumes
+# ==========================================
+
+networks:
+  data-eng-net:
+    name: data-eng-net
+    driver: bridge
+
+volumes:
+  postgres_hive_data:
+  postgres_airflow_data:
+  namenode_data:
+  secondary_namenode_data:
+  datanode_data:
+  hadoop_history_data:
+  spark_master_data:
+  kafka_data:
+  nifi_conf:
+  nifi_database:
+  nifi_flowfile:
+  nifi_content:
+  nifi_provenance:
+  nifi_state:
+  clickhouse_data:
+  clickhouse_log:
